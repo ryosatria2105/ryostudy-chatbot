@@ -23,6 +23,11 @@ const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY
 });
 
+// Pastikan folder uploads ada
+if (!fs.existsSync("uploads")) {
+  fs.mkdirSync("uploads", { recursive: true });
+}
+
 const upload = multer({ dest: "uploads/" });
 
 app.get("/", (req, res) => {
@@ -30,6 +35,8 @@ app.get("/", (req, res) => {
 });
 
 app.post("/api/chat", upload.single("file"), async (req, res) => {
+  let tempFilePath = null;
+
   try {
     const message = req.body.message || "";
 
@@ -41,36 +48,31 @@ app.post("/api/chat", upload.single("file"), async (req, res) => {
 
     const contents = [];
 
-    // ── Prompt dasar / persona ──────────────────────────────────────────────
-    const prompt = `
-Kamu adalah RyoStudy AI, asisten belajar untuk mahasiswa.
-Jawab dengan bahasa Indonesia yang santai, jelas, dan mudah dipahami.
+    // Simpan path file sementara kalau ada
+    if (req.file) {
+      tempFilePath = req.file.path;
+    }
 
-ATURAN PENTING:
-- Jawab SINGKAT dan PADAT. Maksimal 3-5 kalimat untuk pertanyaan sederhana.
-- Jangan bertele-tele, langsung ke inti jawaban.
-- Hanya panjang jika pertanyaannya memang kompleks atau meminta penjelasan detail.
-- Jangan ulangi pertanyaan user di awal jawaban.
-- Jangan pakai pembuka seperti "Tentu!", "Baik!", "Pertanyaan bagus!" dll.
-- Jika ada file, analisis file tersebut lalu jawab berdasarkan isi file secara ringkas.
-
-Pertanyaan user:
-${message || "(tidak ada pertanyaan teks)"}
-`;
-
-    contents.push({ text: prompt });
+    // Isi pesan user
+    contents.push({
+      role: "user",
+      parts: [
+        {
+          text: message || "Tolong analisis file ini."
+        }
+      ]
+    });
 
     // Kalau ada file, kirim file ke Gemini
     if (req.file) {
       const fileBuffer = fs.readFileSync(req.file.path);
-      contents.push({
+
+      contents[0].parts.push({
         inlineData: {
           mimeType: req.file.mimetype,
           data: fileBuffer.toString("base64")
         }
       });
-      // hapus file sementara setelah dibaca
-      fs.unlinkSync(req.file.path);
     }
 
     console.log("Pesan masuk:", message);
@@ -81,21 +83,68 @@ ${message || "(tidak ada pertanyaan teks)"}
 
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents
+      contents,
+      config: {
+        systemInstruction: `
+Kamu adalah RyoStudy AI, asisten AI untuk mahasiswa.
+
+GAYA KOMUNIKASI:
+- Gunakan bahasa Indonesia yang natural, santai, cerdas, dan enak dibaca.
+- Jawaban harus terasa seperti ngobrol dengan asisten modern yang pintar, bukan bot kaku.
+- Ramah tapi tidak lebay.
+- Jangan gunakan pembuka klise seperti "Tentu!", "Baik!", "Pertanyaan bagus!", dan sejenisnya.
+- Jangan mengulang pertanyaan user di awal jawaban.
+- Langsung masuk ke inti.
+
+ATURAN JAWABAN:
+- Untuk pertanyaan sederhana, jawab singkat, padat, dan jelas.
+- Untuk pertanyaan yang kompleks, jawab lebih rinci, bertahap, dan tetap mudah dipahami.
+- Jangan bertele-tele kalau tidak perlu.
+- Jika user salah paham, luruskan dengan halus tapi tegas.
+- Jika user meminta opini, perbandingan, atau saran, beri jawaban yang seimbang dan kasih alasan.
+- Jika pertanyaan agak kurang lengkap, tetap bantu dengan asumsi yang paling masuk akal.
+- Kalau ada file, analisis file itu dulu lalu jawab berdasarkan isinya dengan relevan.
+- Kalau user minta rangkuman, buat ringkas tapi tetap informatif.
+- Kalau user minta penjelasan, utamakan kejelasan daripada istilah rumit.
+
+FORMAT:
+- Gunakan paragraf biasa secara default.
+- Gunakan poin-poin hanya kalau memang membantu.
+- Hindari jawaban kosong, terlalu pendek, atau terasa nanggung.
+        `,
+        maxOutputTokens: 2048,
+        temperature: 0.8
+      }
     });
 
     console.log("Respons Gemini diterima");
 
-    res.json({
-      reply: response.text
-    });
+    const reply =
+      response.text ||
+      response.candidates?.[0]?.content?.parts
+        ?.map((part) => part.text || "")
+        .join("")
+        .trim() ||
+      "AI tidak mengembalikan jawaban.";
 
+    res.json({
+      reply
+    });
   } catch (error) {
     console.error("ERROR:", error);
     res.status(500).json({
       error: "Terjadi kesalahan pada AI",
       detail: error.message
     });
+  } finally {
+    // Hapus file sementara kalau ada
+    if (tempFilePath && fs.existsSync(tempFilePath)) {
+      try {
+        fs.unlinkSync(tempFilePath);
+      } catch (err) {
+        console.error("Gagal menghapus file sementara:", err.message);
+      }
+    }
   }
 });
 
