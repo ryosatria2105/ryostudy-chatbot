@@ -132,8 +132,14 @@ FORMAT:
     });
   } catch (error) {
     console.error("ERROR:", error);
+
+    // ✅ FIX: bedain pesan error quota vs error lainnya
+    const isQuotaError = error.status === 429;
+
     res.status(500).json({
-      error: "Terjadi kesalahan pada AI",
+      error: isQuotaError
+        ? "Quota API habis, coba lagi nanti ya 🙏"
+        : "Terjadi kesalahan pada AI",
       detail: error.message
     });
   } finally {
